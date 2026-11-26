@@ -1,5 +1,8 @@
 # Product Requirements & User Stories
 
+> [!NOTE]
+> This document defines the **v1.0 Core Gateway Baseline** (`E1`–`E6`, `US-01`–`US-16`). For the extended **v2.0 Platform Scope** tailored to our primary organizational demand profile (**15+ active users**, **large Hugging Face Paid Team compute + OpenAI Enterprise OAuth**, hosted on **2× NVIDIA DGX Spark**), see [PLATFORM_PRD_V2.md](PLATFORM_PRD_V2.md).
+
 ## 1. Problem Statement, Objectives & Non-Goals
 
 Sensitive organizations need developer and analyst productivity from frontier closed models (OpenAI, OpenRouter) alongside private local models (vLLM, Ollama), without risking leakage of classified records, credentials, proprietary source code, internal infrastructure, or PII—and without letting unmonitored users execute unauthorized AI-assisted actions.

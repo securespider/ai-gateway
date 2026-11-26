@@ -27,6 +27,18 @@ Make `secure-ai-gateway` the **sovereign, zero-persistence AI control plane** fo
 * **Not a Persistent Prompt/Conversation Memory Store:** Does not store user chat histories or raw Inference Tables.
 * **Never Delegates DLP or Judging Externally:** Zero external cloud guardrail APIs or SaaS telemetry phone-home.
 
+### 1.1 Target Demand & Deployment Profile (15+ Users on 2× NVIDIA DGX Spark)
+
+`secure-ai-gateway` v2.0 is sized and prioritized around the organization's primary operational workload:
+
+* **User & Concurrency Profile:** **15+ active internal engineers, analysts, and autonomous agents** (`1–20 RPS` typical sustained traffic, bursting up to `50 RPS` during concurrent agent runs and SSE streams).
+* **Primary Upstream Demand:**
+  1. **Large Hugging Face Compute on Paid Team Plan (`\$20/user/month` + Pooled Credits & Zero-Markup Pay-As-You-Go):** Heavy usage of **Hugging Face Inference Providers (`router.huggingface.co`)**, which dynamically route OpenAI-compatible requests to third-party inference partners (Together, Fireworks, Groq, Cerebras, Replicate, etc.). Because downstream retention depends on the executing partner, 100% of HF traffic is treated strictly as `trust_zone == "external"` with mandatory ZDR sub-provider pinning (blocking unvetted `:auto`/`:fastest` routing), while proprietary code reroutes locally to the **2× DGX Spark** enclave. Aligns with HF Team Plan SSO (SAML/OIDC), Resource Groups, Storage Region controls, and Org Audit Logs.
+  2. **Closed Frontier Models via OpenAI Enterprise OAuth & API:** High demand for OpenAI `/v1/chat/completions` and **`/v1/responses`** (used by Codex and modern OAuth clients) brokered under corporate OpenAI tenant IDs—while **strictly blocking personal/consumer BYOS ChatGPT OAuth tokens**.
+* **Target Hosting Hardware (`2× NVIDIA DGX Spark`):** Hosted internally on two clustered **NVIDIA DGX Spark** systems (`GB10 Grace Blackwell Superchip`, **128 GB unified LPDDR5x memory per node**, `200 Gbps ConnectX-7` SmartNIC interconnect, `10 GbE` LAN, **NVIDIA DGX OS `linux/arm64`**):
+  * **Spark Node 1:** Primary gateway replica, storage/telemetry stack, and an always-warm `7B–8B` local LLM-as-a-Judge (`~6–10 GB`, leaving `> 100 GB` unified memory headroom).
+  * **Spark Node 2:** Secondary HA gateway replica, local embedding model for DLP-exclusive semantic caching, and large private coding/fallback models (`32B–70B` or `200B` MoE FP4 inside `128 GB` unified memory, or `405B+` pooled across both nodes via `200 Gbps` ConnectX-7).
+
 ---
 
 ## 2. Expanded User Personas & Jobs-to-be-Done (JTBD)
@@ -127,13 +139,13 @@ flowchart TB
 * **API / Config Surface:** `POST /admin/tenants/orgs`, `POST /admin/tenants/teams`, `POST /admin/tenants/projects`, header `X-Gateway-Project-Id`.
 * **Failure Semantics:** Quota store failure on external traffic fails closed (`503`) to prevent unbudgeted spend spikes.
 
-#### US-22 — Soft Budget Webhooks, Cost-Center Tagging & Modality-Aware Spend Accounting (`P1`)
-*Inspired by: Databricks Soft Alerts, Kong Modality Cost Tracking, LiteLLM Spend Tags*
-* **Story:** *As a Department / Team Lead*, I want non-blocking soft budget alerts at `80%` and `90%` utilization, `X-Gateway-Cost-Center` chargeback tags, and separate metering for text, audio, image, and upstream prompt-cache read/write tokens, *so that* teams avoid sudden cutoffs and finance gets accurate attribution.
+#### US-22 — Soft Budget Webhooks, Cost-Center Tagging & Per-Subprovider Modality Spend Accounting (`P1`)
+*Inspired by: Databricks Soft Alerts, Kong Modality Cost Tracking, LiteLLM Spend Tags, HF Team Plan Inference Providers Billing*
+* **Story:** *As a Department / Team Lead*, I want non-blocking soft budget alerts at `80%` and `90%` utilization, `X-Gateway-Cost-Center` chargeback tags, separate metering for text/audio/image/cached tokens, **and per-sub-provider (`hf_subprovider`) spend breakdown across Hugging Face Inference Providers**, *so that* teams avoid sudden cutoffs and finance gets accurate attribution by cost center and upstream hardware partner.
 * **Acceptance Criteria (Given/When/Then):**
   * **Given** a Team or Project crosses `80%` or `90%` of its monthly USD budget, **When** the usage ledger updates, **Then** the gateway triggers an idempotent internal webhook alert once per threshold window and attaches `X-Gateway-Budget-Warning: 80%` without blocking traffic.
-  * **Given** a request carries `X-Gateway-Cost-Center` or `X-Gateway-Env` tags validated against an org allowlist, **When** completion finishes, **Then** Prometheus metrics and audit summaries attribute modality-adjusted USD cost (`input`, `output`, `cached_read`, `image`, `audio`) to that cost center.
-* **API / Config Surface:** Headers `X-Gateway-Cost-Center`, `X-Gateway-Budget-Warning`; Prometheus labels `team_id`, `project_id`, `cost_center`, `modality`.
+  * **Given** a request carries `X-Gateway-Cost-Center`, `X-Gateway-Env`, or maps to a Hugging Face Team Resource Group and pinned `:provider`, **When** completion finishes, **Then** Prometheus metrics and audit summaries attribute modality-adjusted USD cost (`input`, `output`, `cached_read`, `image`, `audio`) to that cost center and `hf_subprovider`.
+* **API / Config Surface:** Headers `X-Gateway-Cost-Center`, `X-Gateway-Budget-Warning`, `X-Gateway-HF-Subprovider`; Prometheus labels `team_id`, `project_id`, `cost_center`, `modality`, `hf_subprovider`.
 * **Failure Semantics:** Webhook dispatch failures never block or slow the proxy response path (async bounded queue).
 
 #### US-23 — Pluggable OIDC / SAML SSO & Delegated Team Key Lifecycle (`P2`)
@@ -168,15 +180,15 @@ flowchart TB
 * **API / Config Surface:** `config/models.yaml` (`fallback_chain`), headers `X-Gateway-Fallback-Used`, `X-Gateway-No-Fallback`.
 * **Failure Semantics:** Pre-stream retries only; once SSE chunks begin streaming to client, mid-stream failover is forbidden to avoid corrupted output.
 
-#### US-26 — Complexity Auto-Routing, Anthropic `/v1/messages` & Private VPC Cloud Adapters (`P1`)
-*Inspired by: LiteLLM Auto-Router, Kong Semantic Routing, Credal Anthropic Support*
-* **Story:** *As an Internal Software Engineer*, I want native Anthropic `/v1/messages` support, private VPC cloud adapters (Bedrock, Vertex, Azure OpenAI PrivateLink), and optional local-classifier complexity auto-routing, *so that* Claude SDKs, enterprise cloud endpoints, and cost-saving local routing work out of the box.
+#### US-26 — OpenAI Enterprise OAuth (`/v1/responses`), Hugging Face Inference Providers, `/v1/messages` & Complexity Auto-Routing (`P0`)
+*Inspired by: LiteLLM Auto-Router, Kong Semantic Routing, Credal Anthropic Support, Hugging Face Inference Providers*
+* **Story:** *As an Internal Software Engineer*, I want seamless access to **OpenAI closed models via corporate OAuth (`/v1/chat/completions` & `/v1/responses`)**, **Hugging Face Paid Team ZDR-pinned Inference Providers (`router.huggingface.co`)**, Anthropic `/v1/messages`, private VPC cloud adapters, and optional complexity auto-routing, *so that* Codex, Hugging Face workloads, and multi-SDK agents run safely through one governed gateway.
 * **Acceptance Criteria (Given/When/Then):**
-  * **Given** an Anthropic SDK client calls `POST /v1/messages` (sync or SSE), **When** processed by the gateway, **Then** it undergoes the full DLP, `TokenVault` pseudonymization/SSE restore, guardrail, and audit pipeline and returns Anthropic-compliant responses/events.
-  * **Given** a virtual alias `auto/cost-optimized` is invoked, **When** a `< 3 ms` local heuristic/classifier scores prompt complexity below threshold and detects no restricted rules, **Then** it routes to a fast local model; high-complexity requests route to the configured frontier tier (still gated by DLP).
-  * **Given** private cloud adapters (`bedrock_vpc`, `azure_privatelink`, `vertex_psc`) are configured, **When** outbound requests run, **Then** `EgressGuardTransport` verifies private endpoint hostnames against `allowed_egress_hosts`.
-* **API / Config Surface:** `POST /v1/messages`, `config/models.yaml` (`provider_type: anthropic | bedrock | azure | vertex`, `auto_router`).
-* **Failure Semantics:** Auto-router classifier errors fail safely to the caller's default authorized fallback tier without skipping DLP.
+  * **Given** a client calls `POST /v1/responses` or `POST /v1/chat/completions` presenting a corporate OpenAI OAuth token, **When** the gateway validates the token, **Then** it verifies membership in the pinned corporate OpenAI org/tenant ID (`X-Gateway-OAuth-Tenant`), rejects personal/consumer BYOS ChatGPT OAuth accounts (`403 personal_oauth_prohibited`), never persists OAuth access/refresh tokens, and runs the full DLP + RAM `TokenVault` SSE restore + guardrail pipeline.
+  * **Given** a request targets a **Hugging Face Paid Team** model alias (`provider_type: huggingface_providers` via `router.huggingface.co`), **When** processed, **Then** it enforces `trust_zone == "external"` fail-closed DLP + RAM pseudonymization, requires an explicit ZDR-approved `:provider` suffix from `allowed_hf_subproviders` (blocking unvetted `:auto`, `:fastest`, or `:cheapest` routing), and emits `X-Gateway-HF-Subprovider`.
+  * **Given** an Anthropic SDK client calls `POST /v1/messages` (sync or SSE) or an alias uses `auto/cost-optimized`, **When** processed, **Then** `/v1/messages` undergoes full DLP/TokenVault/guardrail inspection and `auto/cost-optimized` routes low-complexity clean prompts (`< 3 ms` local classifier) to local DGX Spark models while honoring trust-zone boundaries.
+* **API / Config Surface:** `POST /v1/responses`, `POST /v1/messages`, `config/models.yaml` (`provider_type: openai_oauth | huggingface_providers | anthropic | bedrock | azure | vertex`, `allowed_hf_subproviders`, `block_unvetted_hf_routing`, `allowed_openai_tenant_ids`, `auto_router`), headers `X-Gateway-OAuth-Tenant`, `X-Gateway-HF-Subprovider`.
+* **Failure Semantics:** Unverified OAuth tenant claims, unapproved Hugging Face sub-providers, or disallowed `:auto`/`:fastest` suffixes fail closed (`403`). Auto-router classifier errors fall back safely to the caller's default authorized tier without skipping DLP.
 
 ---
 
@@ -304,8 +316,10 @@ flowchart TB
 | **Atomic Key / Agent Revocation Propagation (HA)** | `<= 1.0 s` across all replicas | Multi-worker Valkey pub/sub + fail-secure fallback test |
 | **ASGI Pre-Handler Queue Wait** | `< 5 ms` p99 at rated concurrency | `gateway_asgi_queue_wait_seconds` load test |
 | **HITL Webhook Notification Dispatch** | `< 50 ms` async enqueue | Non-blocking background dispatcher test |
-| **Single-Node Base Memory Footprint** | `< 180 MB` RSS per worker (SQLite mode) | Container memory profiling (vs ~500 MB LiteLLM baseline) |
-| **Platform Availability (HA Postgres+Valkey Mode)** | `99.95%` (excluding upstream provider outages) | Multi-replica `/readyz` + circuit breaker failover tests |
+| **Single-Node Base Memory Footprint** | `< 180 MB` RSS per worker (SQLite mode) | Container memory profiling on `linux/arm64` DGX OS (vs ~500 MB LiteLLM baseline) |
+| **Target Hardware & Cluster Capacity** | `linux/arm64` (`aarch64`) builds; `>= 50 RPS` burst on **2× NVIDIA DGX Spark** (`15+` users) | Multi-arch build verification + 2-node ConnectX-7 load test |
+| **OpenAI `/v1/responses` & HF SSE Integrity** | `100%` chunk-safe `TokenVault` restore across `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, HF streams | Mocked chunk-split SSE suite across all protocol adapters |
+| **Platform Availability (HA Postgres+Valkey Mode)** | `99.95%` (excluding upstream provider outages) | Multi-replica `/readyz` + 2-node DGX Spark failover tests |
 | **Zero-Leak & Air-Gap Verification** | `0` raw secrets/PII persisted; `0` outbound test calls | Offline CI suite (`pytest`, `ruff`, `mypy`, `MockTransport`) |
 
 ---
@@ -315,8 +329,8 @@ flowchart TB
 | Epic | Preserved v1.0 Invariants (`#1`–`#12`) | New Platform Invariants (`#13`–`#16`) & Enforcement Mechanism |
 | :--- | :--- | :--- |
 | **E7 (MCP & Agents)** | `#1` Zero Persistence, `#2` Fail-Closed DLP, `#6` Judge Nonce, `#9` HMAC Keys, `#10` Egress Allowlist, `#12` Serialized Audit | **`#15` Zero-Injection Parameter-Scoped MCP:** Declarative param bounds, pre/post DLP, zero debug execution routes; HITL stores only request SHA-256 digests. |
-| **E8 (Multi-Tenant FinOps)** | `#1` Zero Persistence, `#9` HMAC Keys, `#12` Serialized Audit | Cascading quota checks before dispatch; OIDC local JWKS verification; chargeback tags validated against strict allowlists. |
-| **E9 (Intelligent Routing)** | `#2` Fail-Closed DLP, `#5` Local Judge, `#8` Respect `No-Fallback`, `#10` Egress Guard, `#11` OpenRouter ZDR | **`#13` Trust-Zone Monotonicity:** Local/rerouted traffic never fails over externally; external adapters always re-run full DLP + ZDR. |
+| **E8 (Multi-Tenant FinOps)** | `#1` Zero Persistence, `#9` HMAC Keys, `#12` Serialized Audit | Cascading quota checks before dispatch; OIDC local JWKS verification; chargeback tags + per-HF-sub-provider (`hf_subprovider`) token spend attribution validated against strict allowlists. |
+| **E9 (Intelligent Routing)** | `#2` Fail-Closed DLP, `#5` Local Judge, `#8` Respect `No-Fallback`, `#10` Egress Guard, `#11` OpenRouter ZDR | **`#13` Trust-Zone Monotonicity:** Local/rerouted traffic never fails over externally; corporate OpenAI OAuth tokens pinned & never persisted (personal BYOS blocked); HF Inference Providers ZDR-allowlisted (`:auto`/`:fastest` blocked). |
 | **E10 (Privacy-Safe Cache)** | `#1` Zero Persistence, `#4` RAM-Only `TokenVault` | **`#14` DLP-Exclusive Tenant-Isolated Cache:** Cache keys include `(tenant, role, model, policy_hash)`; zero cache read/write on any sensitive finding. |
 | **E11 (Prompt Registry)** | `#1` Zero Persistence, `#2` Fail-Closed DLP, `#6` Judge Nonce | Secrets detector scans templates at registration; DLP + guardrails inspect final rendered + decorated payload before egress. |
 | **E12 (Shadow & Feedback)** | `#1` Zero Persistence, `#12` Serialized Audit | Shadow mode logs only trigger counts/deltas; `/v1/feedback` runs DLP scrubbing on optional comment fields and binds via `request_id`. |

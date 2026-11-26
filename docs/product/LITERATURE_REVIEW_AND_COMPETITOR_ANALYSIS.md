@@ -1,6 +1,6 @@
 # Market Literature Review & Competitor Analysis
 
-> **Scope & Baseline:** This analysis evaluates five leading enterprise AI gateway and governance platforms in the 2025–2026 market against the `secure-ai-gateway` v1.0 baseline ([PRD_AND_USER_STORIES.md](PRD_AND_USER_STORIES.md), [PROPOSED_ARCHITECTURE.md](../../docs/architecture/PROPOSED_ARCHITECTURE.md), and [AGENTS.md](../../AGENTS.md)). Its purpose is to ground v2.0 platform product planning in verified market capabilities, architectural trade-offs, security incidents, and unserved enterprise white space.
+> **Scope & Baseline:** This analysis evaluates five leading commercial/OSS enterprise AI gateway platforms plus one production hyperscale internal reference architecture (**Uber GenAI Gateway**) in the 2024–2026 market against the `secure-ai-gateway` v1.0 baseline ([PRD_AND_USER_STORIES.md](PRD_AND_USER_STORIES.md), [PROPOSED_ARCHITECTURE.md](../../docs/architecture/PROPOSED_ARCHITECTURE.md), and [AGENTS.md](../../AGENTS.md)). Its purpose is to ground v2.0 platform product planning in verified market capabilities, architectural trade-offs, security incidents, and unserved enterprise white space.
 
 ---
 
@@ -36,7 +36,7 @@ To compare competitors objectively for sensitive, security-conscious engineering
 
 ---
 
-## 3. Detailed Literature Reviews (5 Market Platforms)
+## 3. Detailed Literature Reviews (5 Market Platforms + 1 Internal Reference Architecture)
 
 ### 3.1 LiteLLM (Proxy & Enterprise AI Gateway)
 
@@ -125,53 +125,71 @@ To compare competitors objectively for sensitive, security-conscious engineering
 
 ---
 
+### 3.6 Uber GenAI Gateway (Internal Enterprise Reference Architecture)
+
+* **Market Positioning & Architecture:** Proprietary, high-performance **Go-based** LLM serving proxy built by Uber Engineering (published July 2024, integrated with Uber's **Michelangelo** ML platform). Built to eliminate fragmented, per-team LLM integrations across 60+ internal use cases (customer support automation, chat summarization, SQL generation, Uber Eats recommendations) by centralizing traffic to third-party vendors (OpenAI, Google Vertex AI) and Uber-hosted fine-tuned open-source models (Llama, Mixtral).
+* **Core Capabilities:**
+  * *OpenAI API Schema Mirroring:* Mirrors OpenAI's standard HTTP/JSON interface so internal apps and open-source frameworks (LangChain, LlamaIndex) work out of the box and backend models can be swapped without client code changes.
+  * *Synchronous PII Redaction & Security Gate:* Automatically detects and strips/redacts 20+ types of PII synchronously before prompts leave Uber's network perimeter; pairs with a mandatory Engineering Security review gate before onboarding new use cases.
+  * *Zero-Trust Workload Identity:* Authenticates internal calling services using cryptographic workload identities (**SPIFFE/SPIRE**) rather than relying solely on static long-lived API keys.
+  * *Control-Plane Auto-Discovery & FinOps:* Integrates with Michelangelo's Control Plane to dynamically discover and catalog model endpoints, while enforcing per-team rate limits, budget caps, chargebacks, request caching, load balancing, and end-to-end token/latency/audit telemetry.
+* **Verified Strengths:** Low-latency, high-concurrency Go proxy architecture (goroutines) well-suited to massive network I/O and SSE streaming; seamless OpenAI-compatible developer onboarding; strong internal zero-trust identity (SPIFFE/SPIRE) and pre-onboarding security review discipline; dynamic model endpoint discovery.
+* **Verified Weaknesses & Operational Limitations:**
+  * *Not Available as an Off-the-Shelf Product:* Proprietary internal service tightly coupled to Uber's Go monorepo, Michelangelo ML platform, and internal service mesh—unusable directly by external or air-gapped teams without rebuilding the platform.
+  * *Static PII Redaction Only:* Strips/redacts PII before external egress rather than performing reversible RAM-only pseudonymization with SSE chunk restoration, which can degrade downstream reasoning quality when entity consistency matters.
+  * *Split Model vs. Tool Control Plane:* Originally built as a Model Gateway, requiring a separate **MCP Gateway** layer later to govern agent-to-tool permissions rather than unifying LLM and MCP governance in a single policy engine.
+* **Pricing & Air-Gap Topology:** Internal bespoke engineering build (not commercially licensed). Operates inside Uber's private infrastructure with controlled external egress to approved vendor APIs.
+* **Takeaways for `secure-ai-gateway`:** Validates our **OpenAI API mirroring** and **synchronous pre-egress DLP** design; highlights **SPIFFE/SPIRE zero-trust workload identity** (for internal service-to-gateway auth), **control-plane model endpoint auto-discovery**, and **mandatory security onboarding gates** as high-value patterns; and reinforces our **ADR-01** option to place a Go/Rust edge proxy in front of our Python DLP engine if concurrency ever scales past 5,000+ simultaneous streams.
+
+---
+
 ## 4. Comprehensive Competitive Feature & Rubric Comparison
 
 ### 4.1 Capability Comparison Matrix
 
-| Capability | LiteLLM Proxy | Portkey (PANW Prisma AIRS) | Kong AI Gateway | Databricks Mosaic AI | Credal AI | `secure-ai-gateway` v1.0 (Baseline) | `secure-ai-gateway` v2.0 (Target) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Deployment Model** | Self-hosted OSS / Enterprise | SaaS / Hybrid / Ent. Air-Gap | SaaS Konnect / Ent. Self-Host | Cloud Lakehouse (Managed) | Ent. SaaS / Private VPC | 100% Offline Container | 100% Offline Container + HA Option |
-| **Air-Gap Readiness (Zero Phone-Home)** | High (needs Postgres + Redis) | Paid Ent. only (Hybrid phones home) | Paid Ent. only (Lua + Postgres) | None (Cloud-coupled) | Enterprise-negotiated | **Best-in-Class** (SQLite WAL, zero egress) | **Best-in-Class** (SQLite default, optional HA) |
-| **Zero-Persistence Audit (No Raw Prompts)** | Opt-out logging (DB stores logs) | Logs persisted in ClickHouse | Configurable / SIEM | Inference Tables store raw text | Audit logs store prompts/tools | **Hard Invariant** (Counts + HMAC + SHA-256 chain) | **Hard Invariant** (Tamper-evident zero-leak) |
-| **Deterministic Local DLP (<10 ms)** | Presidio plugin (heavier) | Built-in + regex (Ent. focus) | `ai-sanitizer` (Paid Ent.) | Built-in PII/PHI (Cloud) | Self-hosted DLP | **5 Built-in Offline Detectors + Checksums** | **5 Built-in + Optional Local NER** |
-| **Reversible Pseudonymization + SSE Restore** | No (static masking) | Partial / static masking | Static redaction | Static masking | Mask / redact | **Yes (RAM TokenVault + Chunk-Safe SSE)** | **Yes (RAM TokenVault + Chunk-Safe SSE)** |
-| **Local-Only LLM Guardrail Judge + Nonce** | External/custom guardrails | Cloud/custom guardrails | Custom / NeMo plugin | Cloud/partner guardrails | Self-hosted models | **Yes (Local-only + Randomized Nonce)** | **Yes (Local-only + Nonce + Shadow Eval)** |
-| **External Modality Gate (Image/Audio/File)** | Pass-through | Pass-through | Modality cost tracking | Pass-through | File connectors | **Hard 403 Gate unless RBAC-allowed** | **Hard 403 Gate + Local VLM Reroute** |
-| **OpenRouter ZDR (`data_collection: deny`)** | Manual param | Manual param | Manual param | N/A | N/A | **Enforced by Default** | **Enforced Across External Adapters** |
-| **Provider & Protocol Breadth** | 100+ providers | 250–1,600+ models | ~15+ providers | Databricks + major clouds | OpenAI + Anthropic | OpenAI, OpenRouter, Ollama/vLLM | + Anthropic `/v1/messages`, Private VPC Clouds |
-| **Canary / A-B Split & Fallback Chains** | Yes (Load balance + fallback) | Yes (Weighted + circuit breaker) | Yes (`ai-proxy-advanced`) | Yes (Proportional A/B) | Basic routing | Single local fallback | **Trust-Zone-Monotonic Canary & Fallbacks** |
-| **Exact & Semantic Caching** | Yes (Redis/Valkey/Qdrant) | Yes (Native Semantic, Paid) | Yes (Paid Ent. plugin) | Prompt cache pass-through | No | None | **Tenant-Isolated & DLP-Exclusive Cache** |
-| **Governed MCP Gateway & Tool RBAC** | Yes (Pre/During/Post hooks) | Yes (OAuth + Pre/Post hooks) | Yes (`ai-mcp-proxy`, Paid) | Yes (Unity Catalog MCP) | Yes (Param scoping) | Post-flight `tool_calls` warn | **Full MCP Proxy, Param Scoping & DLP Hooks** |
-| **Agent Identity Registry & HITL Gates** | Virtual keys only | Trace correlation | A2A crypto credentials | Non-human UC principals | **Agent Registry + HITL** | API Key roles only | **Agent Registry + HITL Approval Queue** |
-| **Multi-Tenant Hierarchy (Org/Team/Project)** | **Yes (Org/Team/Key)** | Yes (Workspaces, Ent.) | Consumer Groups | Unity Catalog workspaces | Departments | Flat key-to-role | **Org / Team / Project + Chargeback Tags** |
-| **Prompt Registry & Policy Decorators** | Prompt pass-through | **Prompt Studio & Partials** | **Decorator + Template plugins** | Prompt registry (MLflow) | App-level prompts | Optional placeholder hint | **Versioned Templates + Policy Decorators** |
-| **Policy Dry-Run & Shadow Evaluation** | Basic testing | Playground / Evals | No native shadow mode | MLflow evaluation | Policy testing | `/admin/policy/dry-run` | **Live Shadow Policy Mode + Feedback API** |
-| **Admin Governance UI & Dev Portal** | Yes (Web Admin UI) | Yes (SaaS / Ent. UI) | Konnect Portal (Paid) | Databricks UI | Enterprise Portal | CLI + Admin REST API | **100% Offline Governance Console & Portal** |
-| **OTel GenAI (`gen_ai.*`) & MCP (`mcp.*`)** | OTel export | OTel export | OTel plugin | System tables | Audit export | Custom OTel spans | **Full `gen_ai.*` / `mcp.*` + Queue-Wait** |
-| **Supply-Chain & Zero-Dep Simplicity** | 2026 PyPI/CVE incidents; ~500MB RAM | Clean edge, heavy Ent. stack | Clean C-core, complex Ops | Managed service | Managed / Ent. VPC | Minimal Python 3.12 + SQLite | **Signed Releases + SBOM + SQLite/HA** |
+| Capability | LiteLLM Proxy | Portkey (PANW Prisma AIRS) | Kong AI Gateway | Databricks Mosaic AI | Credal AI | Uber GenAI Gateway *(Internal Ref.)* | `secure-ai-gateway` v1.0 (Baseline) | `secure-ai-gateway` v2.0 (Target) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Deployment Model** | Self-hosted OSS / Enterprise | SaaS / Hybrid / Ent. Air-Gap | SaaS Konnect / Ent. Self-Host | Cloud Lakehouse (Managed) | Ent. SaaS / Private VPC | Internal Go Service (Michelangelo) | 100% Offline Container | 100% Offline Container + HA Option |
+| **Air-Gap Readiness (Zero Phone-Home)** | High (needs Postgres + Redis) | Paid Ent. only (Hybrid phones home) | Paid Ent. only (Lua + Postgres) | None (Cloud-coupled) | Enterprise-negotiated | Internal Infra (Monorepo-coupled) | **Best-in-Class** (SQLite WAL, zero egress) | **Best-in-Class** (SQLite default, optional HA) |
+| **Zero-Persistence Audit (No Raw Prompts)** | Opt-out logging (DB stores logs) | Logs persisted in ClickHouse | Configurable / SIEM | Inference Tables store raw text | Audit logs store prompts/tools | Internal audit logs | **Hard Invariant** (Counts + HMAC + SHA-256 chain) | **Hard Invariant** (Tamper-evident zero-leak) |
+| **Deterministic Local DLP (<10 ms)** | Presidio plugin (heavier) | Built-in + regex (Ent. focus) | `ai-sanitizer` (Paid Ent.) | Built-in PII/PHI (Cloud) | Self-hosted DLP | Sync PII redactor (20+ types) | **5 Built-in Offline Detectors + Checksums** | **5 Built-in + Optional Local NER** |
+| **Reversible Pseudonymization + SSE Restore** | No (static masking) | Partial / static masking | Static redaction | Static masking | Mask / redact | No (static PII redaction) | **Yes (RAM TokenVault + Chunk-Safe SSE)** | **Yes (RAM TokenVault + Chunk-Safe SSE)** |
+| **Local-Only LLM Guardrail Judge + Nonce** | External/custom guardrails | Cloud/custom guardrails | Custom / NeMo plugin | Cloud/partner guardrails | Self-hosted models | Security review gate + guardrails | **Yes (Local-only + Randomized Nonce)** | **Yes (Local-only + Nonce + Shadow Eval)** |
+| **External Modality Gate (Image/Audio/File)** | Pass-through | Pass-through | Modality cost tracking | Pass-through | File connectors | Policy-gated | **Hard 403 Gate unless RBAC-allowed** | **Hard 403 Gate + Local VLM Reroute** |
+| **OpenRouter ZDR (`data_collection: deny`)** | Manual param | Manual param | Manual param | N/A | N/A | N/A (Direct vendor contracts) | **Enforced by Default** | **Enforced Across External Adapters** |
+| **Provider & Protocol Breadth** | 100+ providers | 250–1,600+ models | ~15+ providers | Databricks + major clouds | OpenAI + Anthropic | OpenAI, Vertex AI, in-house Llama/Mixtral | OpenAI, OpenRouter, Ollama/vLLM | + Anthropic `/v1/messages`, Private VPC Clouds |
+| **Canary / A-B Split & Fallback Chains** | Yes (Load balance + fallback) | Yes (Weighted + circuit breaker) | Yes (`ai-proxy-advanced`) | Yes (Proportional A/B) | Basic routing | Load balancing + endpoint discovery | Single local fallback | **Trust-Zone-Monotonic Canary & Fallbacks** |
+| **Exact & Semantic Caching** | Yes (Redis/Valkey/Qdrant) | Yes (Native Semantic, Paid) | Yes (Paid Ent. plugin) | Prompt cache pass-through | No | Request caching | None | **Tenant-Isolated & DLP-Exclusive Cache** |
+| **Governed MCP Gateway & Tool RBAC** | Yes (Pre/During/Post hooks) | Yes (OAuth + Pre/Post hooks) | Yes (`ai-mcp-proxy`, Paid) | Yes (Unity Catalog MCP) | Yes (Param scoping) | Separate MCP Gateway layer | Post-flight `tool_calls` warn | **Full MCP Proxy, Param Scoping & DLP Hooks** |
+| **Agent Identity Registry & HITL Gates** | Virtual keys only | Trace correlation | A2A crypto credentials | Non-human UC principals | **Agent Registry + HITL** | **SPIFFE/SPIRE** workload identity | API Key roles only | **Agent Registry + HITL Approval Queue** |
+| **Multi-Tenant Hierarchy (Org/Team/Project)** | **Yes (Org/Team/Key)** | Yes (Workspaces, Ent.) | Consumer Groups | Unity Catalog workspaces | Departments | Team / use-case quotas & chargeback | Flat key-to-role | **Org / Team / Project + Chargeback Tags** |
+| **Prompt Registry & Policy Decorators** | Prompt pass-through | **Prompt Studio & Partials** | **Decorator + Template plugins** | Prompt registry (MLflow) | App-level prompts | App-level / internal | Optional placeholder hint | **Versioned Templates + Policy Decorators** |
+| **Policy Dry-Run & Shadow Evaluation** | Basic testing | Playground / Evals | No native shadow mode | MLflow evaluation | Policy testing | Security review gate | `/admin/policy/dry-run` | **Live Shadow Policy Mode + Feedback API** |
+| **Admin Governance UI & Dev Portal** | Yes (Web Admin UI) | Yes (SaaS / Ent. UI) | Konnect Portal (Paid) | Databricks UI | Enterprise Portal | Michelangelo Control Plane | CLI + Admin REST API | **100% Offline Governance Console & Portal** |
+| **OTel GenAI (`gen_ai.*`) & MCP (`mcp.*`)** | OTel export | OTel export | OTel plugin | System tables | Audit export | Internal Uber telemetry | Custom OTel spans | **Full `gen_ai.*` / `mcp.*` + Queue-Wait** |
+| **Supply-Chain & Zero-Dep Simplicity** | 2026 PyPI/CVE incidents; ~500MB RAM | Clean edge, heavy Ent. stack | Clean C-core, complex Ops | Managed service | Managed / Ent. VPC | Go binary (internal monorepo) | Minimal Python 3.12 + SQLite | **Signed Releases + SBOM + SQLite/HA** |
 
 ### 4.2 Weighted Rubric Scorecard (1–5 Scale)
 
-| Dimension | Weight | LiteLLM | Portkey | Kong AI | Databricks | Credal AI | `secure-ai-gateway` v1.0 | `secure-ai-gateway` v2.0 |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 1. Sovereignty & Air-Gap Readiness | 15% | 3.5 | 2.5 | 3.0 | 1.0 | 2.5 | **5.0** | **5.0** |
-| 2. Zero-Leak DLP & Reversible Egress | 15% | 2.5 | 3.0 | 3.0 | 2.5 | 3.5 | **5.0** | **5.0** |
-| 3. Behavioral Guardrails & Tool Safety | 12% | 3.0 | 4.0 | 3.5 | 3.5 | 4.0 | **4.5** | **5.0** |
-| 4. MCP & Non-Human Agent Governance | 12% | 4.0 | 4.0 | 4.0 | 4.0 | **5.0** | 1.5 | **4.8** |
-| 5. Multi-Provider Routing & Resilience | 10% | **5.0** | **5.0** | 4.0 | 4.0 | 2.5 | 2.5 | **4.5** |
-| 6. Multi-Tenant Governance & FinOps | 10% | **4.5** | 4.0 | 3.5 | **4.5** | 3.5 | 2.5 | **4.5** |
-| 7. Latency, Caching & Footprint | 8% | 2.5 | 4.5 | **4.5** | 3.5 | 3.0 | 4.0 | **4.5** |
-| 8. Observability & Tamper-Evident Audit | 8% | 3.5 | 4.0 | 3.5 | 4.0 | 3.5 | 4.5 | **5.0** |
-| 9. Prompt Lifecycle & Policy Shadowing | 5% | 2.0 | **5.0** | 4.0 | 3.5 | 2.5 | 2.5 | **4.5** |
-| 10. DX / Operator UX & Transparent Cost | 5% | 4.0 | 3.5 | 2.5 | 3.0 | 2.5 | 3.0 | **4.5** |
-| **Weighted Total Score (Max 5.00)** | **100%** | **3.46** | **3.79** | **3.51** | **3.10** | **3.37** | **3.64** | **4.79** |
+| Dimension | Weight | LiteLLM | Portkey | Kong AI | Databricks | Credal AI | Uber GenAI | `secure-ai-gateway` v1.0 | `secure-ai-gateway` v2.0 |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 1. Sovereignty & Air-Gap Readiness | 15% | 3.5 | 2.5 | 3.0 | 1.0 | 2.5 | 3.5 | **5.0** | **5.0** |
+| 2. Zero-Leak DLP & Reversible Egress | 15% | 2.5 | 3.0 | 3.0 | 2.5 | 3.5 | 3.5 | **5.0** | **5.0** |
+| 3. Behavioral Guardrails & Tool Safety | 12% | 3.0 | 4.0 | 3.5 | 3.5 | 4.0 | 3.5 | **4.5** | **5.0** |
+| 4. MCP & Non-Human Agent Governance | 12% | 4.0 | 4.0 | 4.0 | 4.0 | **5.0** | 3.5 | 1.5 | **4.8** |
+| 5. Multi-Provider Routing & Resilience | 10% | **5.0** | **5.0** | 4.0 | 4.0 | 2.5 | 4.0 | 2.5 | **4.5** |
+| 6. Multi-Tenant Governance & FinOps | 10% | **4.5** | 4.0 | 3.5 | **4.5** | 3.5 | **4.5** | 2.5 | **4.5** |
+| 7. Latency, Caching & Footprint | 8% | 2.5 | 4.5 | **4.5** | 3.5 | 3.0 | **4.5** | 4.0 | **4.5** |
+| 8. Observability & Tamper-Evident Audit | 8% | 3.5 | 4.0 | 3.5 | 4.0 | 3.5 | 4.0 | 4.5 | **5.0** |
+| 9. Prompt Lifecycle & Policy Shadowing | 5% | 2.0 | **5.0** | 4.0 | 3.5 | 2.5 | 2.5 | 2.5 | **4.5** |
+| 10. DX / Operator UX & Transparent Cost | 5% | 4.0 | 3.5 | 2.5 | 3.0 | 2.5 | 3.5 | 3.0 | **4.5** |
+| **Weighted Total Score (Max 5.00)** | **100%** | **3.46** | **3.79** | **3.51** | **3.10** | **3.37** | **3.72** | **3.64** | **4.79** |
 
 ---
 
 ## 5. Market Positioning & White-Space Strategy
 
-The market clusters into three crowded corners: **(1) Lightweight/OSS Proxies** (LiteLLM OSS, Portkey OSS) that lack deep zero-leak DLP and enterprise compliance; **(2) Cloud-Coupled Control Planes** (Portkey Enterprise/PANW, Databricks Unity, Credal) that assume cloud telemetry, SaaS control planes, or raw payload persistence; and **(3) Legacy API Gateways** (Kong) that bolt AI plugins onto metered enterprise licensing.
+The market clusters into three crowded corners plus bespoke internal builds: **(1) Lightweight/OSS Proxies** (LiteLLM OSS, Portkey OSS) that lack deep zero-leak DLP and enterprise compliance; **(2) Cloud-Coupled Control Planes** (Portkey Enterprise/PANW, Databricks Unity, Credal) that assume cloud telemetry, SaaS control planes, or raw payload persistence; **(3) Legacy API Gateways** (Kong) that bolt AI plugins onto metered enterprise licensing; and **(4) Bespoke Hyperscaler Internal Gateways** (Uber GenAI Gateway) that require a dedicated Go monorepo, ML control plane (Michelangelo), and service-mesh stack (SPIFFE/SPIRE).
 
 ```mermaid
 flowchart TB

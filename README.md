@@ -1,6 +1,6 @@
 # Secure AI API Gateway
 
-A self-contained, low-latency **Secure AI API Gateway** (`Python 3.12 / FastAPI`) for sensitive organizations. It provides a unified OpenAI-compatible API (`/v1/chat/completions`, `/v1/embeddings`, `/v1/models`) mediating access to **OpenAI**, **OpenRouter** (Zero-Data-Retention enforced), and **locally hosted models (vLLM / Ollama)**, protected by 100% local deterministic DLP, opinionated non-deterministic local guardrails, scoped RBAC/quotas, OpenTelemetry telemetry, and tamper-evident audit logging.
+A self-contained, low-latency **Secure AI API Gateway** (`Python 3.12 / FastAPI`) for sensitive organizations—targeted for **15+ active internal users** and hosted on a **2× NVIDIA DGX Spark (`linux/arm64`) cluster**. It provides a unified OpenAI- and Anthropic-compatible API (`/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/models`) mediating access to **OpenAI (API & Enterprise OAuth)**, **Hugging Face Paid Team Compute** (ZDR-pinned Inference Providers via `router.huggingface.co`), **OpenRouter** (Zero-Data-Retention enforced), and **locally hosted models (vLLM / Ollama)**, protected by 100% local deterministic DLP, opinionated non-deterministic local guardrails, scoped RBAC/quotas, OpenTelemetry telemetry, and tamper-evident audit logging.
 
 ## High-Level Trust Boundary
 
@@ -52,7 +52,7 @@ flowchart LR
 
 | Capability | Design Choice | Security / Operational Benefit |
 | :--- | :--- | :--- |
-| **Unified OpenAI API** | `/v1/chat/completions`, `/v1/embeddings`, `/v1/models` | Drop-in compatibility for internal SDKs, agents, and IDE tools |
+| **Unified Multi-Upstream API** | `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/models` | Drop-in compatibility for OpenAI OAuth/API, Hugging Face Paid Team Inference Providers, and local SDKs |
 | **Deterministic Local DLP** | 100% local classification, secrets, code, infra/org, PII detectors | Zero raw Tier-1/PII egress; fail-closed on external detector errors |
 | **Tiered Policy & Vault** | `BLOCK`, `REROUTE_LOCAL`, `REDACT`, `PSEUDONYMIZE` (RAM-only) | Balances strict egress safety with utility via reversible SSE restoration |
 | **Opinionated Guardrails** | Fast local heuristics + local LLM-as-a-Judge + tool-call guard | Warns users on unauthorized actions in-band and via headers without external calls |
